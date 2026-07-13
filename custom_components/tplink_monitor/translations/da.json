@@ -1,0 +1,47 @@
+{
+    "config": {
+        "step": {
+            "user": {
+                "title": "Konfigurer TP-Link Switch Monitor",
+                "description": "Indtast oplysninger for din TP-Link switch.",
+                "data": {
+                    "ip": "Switchens IP-adresse",
+                    "username": "Brugernavn",
+                    "password": "Adgangskode"
+                }
+            },
+            "reauth_confirm": {
+                "title": "Log ind på TP-Link switch igen",
+                "description": "Switchen afviste de gemte loginoplysninger. Indtast det aktuelle brugernavn og adgangskode.",
+                "data": {
+                    "username": "Brugernavn",
+                    "password": "Adgangskode"
+                }
+            }
+        },
+        "error": {
+            "invalid_auth": "Login mislykkedes. Kontroller dine loginoplysninger.",
+            "cannot_connect": "Kan ikke oprette forbindelse til TP-Link switchen.",
+            "unknown": "Der opstod en ukendt fejl."
+        },
+        "abort": {
+            "already_configured": "Denne switch er allerede konfigureret.",
+            "reauth_successful": "Fornyet login lykkedes."
+        }
+    },
+    "options": {
+        "step": {
+            "init": {
+                "title": "Indstillinger for TP-Link Switch Monitor",
+                "data": {
+                    "scan_interval": "Polling-interval (sekunder)",
+                    "mtu": "MTU-størrelse (bytes)"
+                },
+                "data_description": {
+                    "scan_interval": "Hvor ofte switchen forespørges om statistik.",
+                    "mtu": "Antaget gennemsnitlig framestørrelse, som bruges til at estimere båndbredde ud fra pakketællere."
+                }
+            }
+        }
+    }
+}

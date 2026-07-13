@@ -5,18 +5,43 @@
                 "title": "Configure TP-Link Switch Monitor",
                 "description": "Enter your TP-Link switch details.",
                 "data": {
-                    "ip": "Switch IP Address",
+                    "ip": "Switch IP address",
                     "username": "Username",
-                    "password": "Password",
-                    "scan_interval": "Polling Interval (Seconds)",
-                    "mtu": "MTU Size"
+                    "password": "Password"
+                }
+            },
+            "reauth_confirm": {
+                "title": "Reauthenticate TP-Link switch",
+                "description": "The switch rejected the stored credentials. Enter the current username and password.",
+                "data": {
+                    "username": "Username",
+                    "password": "Password"
                 }
             }
         },
         "error": {
-            "auth_failed": "Login failed. Please check your credentials.",
+            "invalid_auth": "Login failed. Please check your credentials.",
             "cannot_connect": "Cannot connect to the TP-Link switch.",
             "unknown": "An unknown error occurred."
+        },
+        "abort": {
+            "already_configured": "This switch is already configured.",
+            "reauth_successful": "Reauthentication was successful."
+        }
+    },
+    "options": {
+        "step": {
+            "init": {
+                "title": "TP-Link Switch Monitor options",
+                "data": {
+                    "scan_interval": "Polling interval (seconds)",
+                    "mtu": "MTU size (bytes)"
+                },
+                "data_description": {
+                    "scan_interval": "How often the switch is polled for statistics.",
+                    "mtu": "Assumed average frame size used to estimate bandwidth from packet counters."
+                }
+            }
         }
     }
 }
