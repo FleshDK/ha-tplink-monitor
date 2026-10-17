@@ -23,6 +23,24 @@ TP_LINK_STATUS = {
     6: "1000M Full",
 }
 
+# PoE-tabeller. Vaerdierne er laest direkte fra PoeConfigRpm.htm paa en
+# TL-SG1016PE v5.20 og krydstjekket mod switchens egen web-UI.
+TP_POE_STATE = {0: "Disabled", 1: "Enabled"}
+TP_POE_PRIORITY = {0: "High", 1: "Middle", 2: "Low"}
+TP_POE_STATUS = {
+    0: "Off",
+    1: "Turning on",
+    2: "On",
+    3: "Overload",
+    4: "Short",
+    5: "Nonstandard PD",
+}
+
+# Effekt og spaending leveres i tiendedele (86 = 8,6 W, 523 = 52,3 V),
+# stroem i hele milliampere. Bekraeftet ved at regne efter: 52,3 V x 0,165 A
+# = 8,63 W, og siden melder 86.
+POE_TENTHS = 10.0
+
 
 class TPLinkMonitorError(Exception):
     """Base error for the TP-Link monitor client."""
@@ -104,6 +122,31 @@ class TPLinkSwitchClient:
 
         return script_tag.string
 
+    def _get_page_text(self, session: requests.Session, page: str) -> str:
+        """Fetch a page and return the raw HTML.
+
+        ``_get_page_script`` only returns the *first* inline script block, which
+        is enough for the pages it was written for. The PoE page keeps its data
+        in a later block, so this returns everything and lets the caller search.
+        """
+        try:
+            response = session.get(f"http://{self._ip}/{page}", timeout=REQUEST_TIMEOUT)
+        except requests.Timeout as err:
+            raise TPLinkConnectionError(
+                f"Timeout fetching {page} from {self._ip} after {REQUEST_TIMEOUT}s"
+            ) from err
+        except requests.RequestException as err:
+            raise TPLinkConnectionError(
+                f"Network error fetching {page} from {self._ip}: {err}"
+            ) from err
+
+        if response.status_code != 200:
+            raise TPLinkDataError(f"Failed to fetch {page} (HTTP {response.status_code})")
+        if "logonInfo" in response.text:
+            raise TPLinkAuthError(f"Session rejected while fetching {page}")
+
+        return response.text
+
     def fetch_port_statistics(self) -> dict[int, dict[str, Any]]:
         """Fetch and parse port statistics from the switch."""
         session = requests.Session()
@@ -160,3 +203,78 @@ class TPLinkSwitchClient:
             raise TPLinkDataError("Failed to extract MAC address from system info")
 
         return info
+
+    def fetch_poe(self) -> dict[str, Any] | None:
+        """Fetch PoE data, or None if this switch has no PoE page.
+
+        Returns ``{"system": {...}, "ports": {1: {...}, ...}}``. Only the
+        PoE-capable ports appear; on a TL-SG1016PE that is ports 1-8.
+        """
+        session = requests.Session()
+        self._login(session)
+        try:
+            html = self._get_page_text(session, "PoeConfigRpm.htm")
+        except TPLinkDataError:
+            # Non-PoE models simply do not serve this page.
+            return None
+
+        def array(navn: str) -> list[int] | None:
+            match = re.search(rf"{navn}\s*:\s*\[([^\]]*)\]", html)
+            if not match:
+                return None
+            try:
+                return [int(v) for v in match.group(1).split(",") if v.strip() != ""]
+            except ValueError:
+                return None
+
+        def global_value(navn: str) -> int | None:
+            match = re.search(rf"{navn}\s*:\s*(\d+)", html)
+            return int(match.group(1)) if match else None
+
+        state = array("state")
+        power = array("power")
+        current = array("current")
+        voltage = array("voltage")
+        if not (state and power and current and voltage):
+            raise TPLinkDataError("PoE page did not contain the expected arrays")
+
+        priority = array("priority") or []
+        powerlimit = array("powerlimit") or []
+        pdclass = array("pdclass") or []
+        powerstatus = array("powerstatus") or []
+
+        ports: dict[int, dict[str, Any]] = {}
+        for i in range(len(state)):
+            ports[i + 1] = {
+                "poe_state": TP_POE_STATE.get(state[i], "Unknown"),
+                "poe_priority": TP_POE_PRIORITY.get(
+                    priority[i] if i < len(priority) else -1, "Unknown"
+                ),
+                "poe_power_limit": (powerlimit[i] / POE_TENTHS)
+                if i < len(powerlimit)
+                else None,
+                "poe_power": power[i] / POE_TENTHS if i < len(power) else None,
+                "poe_current": current[i] if i < len(current) else None,
+                "poe_voltage": voltage[i] / POE_TENTHS if i < len(voltage) else None,
+                "poe_status": TP_POE_STATUS.get(
+                    powerstatus[i] if i < len(powerstatus) else -1, "Unknown"
+                ),
+                "poe_class_raw": pdclass[i] if i < len(pdclass) else None,
+            }
+
+        system: dict[str, Any] = {}
+        for noegle, navn in (
+            ("limit", "system_power_limit"),
+            ("consumption", "system_power_consumption"),
+            ("remain", "system_power_remain"),
+        ):
+            raw = global_value(navn)
+            system[noegle] = raw / POE_TENTHS if raw is not None else None
+
+        _LOGGER.debug(
+            "PoE: %d ports, %.1f W of %.1f W in use",
+            len(ports),
+            system.get("consumption") or 0.0,
+            system.get("limit") or 0.0,
+        )
+        return {"system": system, "ports": ports}

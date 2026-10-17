@@ -13,7 +13,13 @@ from homeassistant.components.sensor import (
     SensorEntityDescription,
     SensorStateClass,
 )
-from homeassistant.const import EntityCategory, UnitOfDataRate
+from homeassistant.const import (
+    EntityCategory,
+    UnitOfDataRate,
+    UnitOfElectricCurrent,
+    UnitOfElectricPotential,
+    UnitOfPower,
+)
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC, DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -82,6 +88,94 @@ PORT_SENSOR_DESCRIPTIONS: tuple[TPLinkPortSensorDescription, ...] = (
 )
 
 
+
+# PoE-sensorer. De oprettes kun for de porte switchen faktisk leverer PoE-data
+# for - paa en TL-SG1016PE er det port 1-8, mens 9-16 ingen PoE har.
+POE_PORT_SENSOR_DESCRIPTIONS: tuple[TPLinkPortSensorDescription, ...] = (
+    TPLinkPortSensorDescription(
+        key="poe_power",
+        name="PoE Power",
+        icon="mdi:flash",
+        device_class=SensorDeviceClass.POWER,
+        native_unit_of_measurement=UnitOfPower.WATT,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=1,
+        value_fn=lambda port: port.get("poe_power"),
+    ),
+    TPLinkPortSensorDescription(
+        key="poe_current",
+        name="PoE Current",
+        icon="mdi:current-dc",
+        device_class=SensorDeviceClass.CURRENT,
+        native_unit_of_measurement=UnitOfElectricCurrent.MILLIAMPERE,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda port: port.get("poe_current"),
+    ),
+    TPLinkPortSensorDescription(
+        key="poe_voltage",
+        name="PoE Voltage",
+        icon="mdi:sine-wave",
+        device_class=SensorDeviceClass.VOLTAGE,
+        native_unit_of_measurement=UnitOfElectricPotential.VOLT,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        suggested_display_precision=1,
+        value_fn=lambda port: port.get("poe_voltage"),
+    ),
+    TPLinkPortSensorDescription(
+        key="poe_status",
+        name="PoE Status",
+        icon="mdi:power-plug-outline",
+        value_fn=lambda port: port.get("poe_status"),
+    ),
+)
+
+
+@dataclass(frozen=True, kw_only=True)
+class TPLinkSystemSensorDescription(SensorEntityDescription):
+    """Describes a switch-wide sensor derived from the coordinator."""
+
+    value_fn: Callable[[TPLinkCoordinator], Any]
+
+
+SYSTEM_SENSOR_DESCRIPTIONS: tuple[TPLinkSystemSensorDescription, ...] = (
+    TPLinkSystemSensorDescription(
+        key="poe_consumption",
+        name="PoE Consumption",
+        icon="mdi:flash",
+        device_class=SensorDeviceClass.POWER,
+        native_unit_of_measurement=UnitOfPower.WATT,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=1,
+        value_fn=lambda c: (c.poe_system or {}).get("consumption"),
+    ),
+    TPLinkSystemSensorDescription(
+        key="poe_remaining",
+        name="PoE Power Remaining",
+        icon="mdi:battery-charging-50",
+        device_class=SensorDeviceClass.POWER,
+        native_unit_of_measurement=UnitOfPower.WATT,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        suggested_display_precision=1,
+        value_fn=lambda c: (c.poe_system or {}).get("remain"),
+    ),
+    TPLinkSystemSensorDescription(
+        key="poe_budget",
+        name="PoE Power Budget",
+        icon="mdi:gauge",
+        device_class=SensorDeviceClass.POWER,
+        native_unit_of_measurement=UnitOfPower.WATT,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        suggested_display_precision=1,
+        value_fn=lambda c: (c.poe_system or {}).get("limit"),
+    ),
+)
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry,
@@ -105,7 +199,20 @@ async def async_setup_entry(
             TplinkPortSensor(coordinator, port, system_info, description)
             for description in PORT_SENSOR_DESCRIPTIONS
         )
+        # Only PoE-capable ports report power data.
+        if "poe_power" in (coordinator.data or {}).get(port, {}):
+            entities.extend(
+                TplinkPortSensor(coordinator, port, system_info, description)
+                for description in POE_PORT_SENSOR_DESCRIPTIONS
+            )
 
+    if coordinator.poe_system:
+        entities.extend(
+            TplinkSystemSensor(coordinator, system_info, description)
+            for description in SYSTEM_SENSOR_DESCRIPTIONS
+        )
+
+    _LOGGER.debug("Creating %d entities", len(entities))
     async_add_entities(entities)
 
 
@@ -241,3 +348,29 @@ class TplinkPortBandwidthSensor(CoordinatorEntity[TPLinkCoordinator], SensorEnti
             "rx_mbps": round(self._rx_mbps, 2),
             "tx_mbps": round(self._tx_mbps, 2),
         }
+
+
+class TplinkSystemSensor(CoordinatorEntity[TPLinkCoordinator], SensorEntity):
+    """A switch-wide sensor, such as the total PoE consumption."""
+
+    _attr_has_entity_name = True
+    entity_description: TPLinkSystemSensorDescription
+
+    def __init__(
+        self,
+        coordinator: TPLinkCoordinator,
+        system_info: dict[str, str],
+        description: TPLinkSystemSensorDescription,
+    ) -> None:
+        """Initialize the sensor."""
+        super().__init__(coordinator)
+        self.entity_description = description
+        self._device_mac = system_info["mac_address"]
+        self._attr_name = description.name
+        self._attr_unique_id = f"{self._device_mac}_{description.key}"
+        self._attr_device_info = _build_device_info(self._device_mac, system_info)
+
+    @property
+    def native_value(self) -> Any:
+        """Return the value for this sensor."""
+        return self.entity_description.value_fn(self.coordinator)
